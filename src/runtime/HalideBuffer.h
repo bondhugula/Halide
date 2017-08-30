@@ -17,18 +17,6 @@
 
 #include "HalideRuntime.h"
 
-#ifndef EXPORT
-#if defined(_MSC_VER)
-#ifdef Halide_EXPORTS
-#define EXPORT __declspec(dllexport)
-#else
-#define EXPORT __declspec(dllimport)
-#endif
-#else
-#define EXPORT __attribute__((visibility("default")))
-#endif
-#endif
-
 #ifdef _MSC_VER
 #define HALIDE_ALLOCA _alloca
 #else
