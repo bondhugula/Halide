@@ -1737,65 +1737,8 @@ void Func::invalidate_cache() {
     }
 }
 
-Func Func::in(const Func &f) {
-    invalidate_cache();
-    user_assert(name() != f.name()) << "Cannot call 'in()' on itself\n";
-    const map<string, FunctionPtr> &wrappers = func.wrappers();
-    const auto &iter = wrappers.find(f.name());
-    if (iter == wrappers.end()) {
-        Func wrapper(func.new_function_in_same_group(name() + "_in_" + f.name()));
-        wrapper(args()) = (*this)(args());
-        func.add_wrapper(f.name(), wrapper.func);
-        return wrapper;
-    }
-
-    FunctionPtr wrapper_contents = iter->second;
-    internal_assert(wrapper_contents.defined());
-
-    // Make sure that no other Func shares the same wrapper as 'f'
-    for (const auto &it : wrappers) {
-        if (it.first == f.name()) {
-            continue;
-        }
-        user_assert(!it.second.same_as(wrapper_contents))
-            << "Redefinition of shared wrapper with " << it.first << " [" << name() << " -> "
-            << Function(wrapper_contents).name() << "] in " << f.name() << " is not allowed\n";
-    }
-    Function wrapper(wrapper_contents);
-    internal_assert(wrapper.frozen());
-    return Func(wrapper);
-}
-
-Func Func::in(const vector<Func>& fs) {
-    invalidate_cache();
-    if (fs.empty()) {
-        user_error << "Could not create a wrapper for an empty list of Funcs\n";
-    }
-
-    // Either all Funcs have the same wrapper or they don't already have any wrappers.
-    // Otherwise, throw an error.
-    const map<string, FunctionPtr> &wrappers = func.wrappers();
-
-    const auto &iter = wrappers.find(fs[0].name());
-    if (iter == wrappers.end()) {
-        // Make sure the other Funcs also don't have any wrappers
-        for (size_t i = 1; i < fs.size(); ++i) {
-            user_assert(wrappers.count(fs[i].name()) == 0)
-                << "Cannot define the wrapper since " << fs[i].name()
-                << " already has a wrapper while " << fs[0].name() << " doesn't \n";
-        }
-        Func wrapper(func.new_function_in_same_group(name() + "_wrapper"));
-        wrapper(args()) = (*this)(args());
-        for (const Func &f : fs) {
-            user_assert(name() != f.name()) << "Cannot call 'in()' on itself\n";
-            func.add_wrapper(f.name(), wrapper.func);
-        }
-        return wrapper;
-    }
-
-    FunctionPtr wrapper_contents = iter->second;
-    internal_assert(wrapper_contents.defined());
-
+void validate_wrapper(const string &name, const map<string, FunctionPtr> &wrappers,
+                      const vector<Func> &fs, const FunctionPtr &wrapper) {
     // Make sure all the other Funcs in 'fs' share the same wrapper and no other
     // Func not in 'fs' share the same wrapper.
     for (const auto &it : wrappers) {
@@ -1807,18 +1750,72 @@ Func Func::in(const vector<Func>& fs) {
         bool in_fs = fs_iter != fs.end();
 
         if (in_fs) {
-            user_assert(it.second.same_as(wrapper_contents))
+            user_assert(it.second.same_as(wrapper))
                 << it.first << " should have shared the same wrapper as " << fs[0].name() << "\n";
         } else {
-            user_assert(!it.second.same_as(wrapper_contents))
-                << "Redefinition of shared wrapper [" << name() << " -> "
-                << Function(wrapper_contents).name() << "] in " << fs[0].name() << " is illegal since "
-                << it.first << " shares the same wrapper but not part of the redefinition\n";
+            user_assert(!it.second.same_as(wrapper))
+                << "Redefinition of shared wrapper [" << name << " -> "
+                << Function(wrapper).name() << "] in " << fs[0].name() << " is illegal since "
+                << it.first << " shares the same wrapper but is not part of the redefinition\n";
         }
     }
-    Function wrapper(wrapper_contents);
+}
+
+Func create_in_wrapper(Function wrapped_fn, string wrapper_name) {
+    Func wrapper(wrapped_fn.new_function_in_same_group(wrapper_name));
+    vector<Var> args = Func(wrapped_fn).args();
+    wrapper(args) = Func(wrapped_fn)(args);
+    return wrapper;
+}
+
+Func create_clone_wrapper(Function wrapped_fn, string wrapper_name) {
+    Func wrapper(wrapped_fn.new_function_in_same_group(wrapper_name));
+    std::map<FunctionPtr, FunctionPtr> empty;
+    wrapped_fn.deep_copy(wrapper.name(), wrapper.function().get_contents(), empty);
+    return wrapper;
+}
+
+Func get_wrapper(Function wrapped_fn, string wrapper_name, const vector<Func> &fs, bool clone) {
+    // Either all Funcs in 'fs' have the same wrapper or they don't already
+    // have any wrappers. Otherwise, throw an error.
+    const map<string, FunctionPtr> &wrappers = wrapped_fn.wrappers();
+    const auto &iter = wrappers.find(fs[0].name());
+    if (iter == wrappers.end()) {
+        // Make sure the other Funcs also don't have any wrappers
+        for (size_t i = 1; i < fs.size(); ++i) {
+            user_assert(wrappers.count(fs[i].name()) == 0)
+                << "Cannot define the wrapper since " << fs[i].name()
+                << " already has a wrapper while " << fs[0].name() << " doesn't \n";
+        }
+        Func wrapper = create_in_wrapper(wrapped_fn, wrapper_name);
+        Function wrapper_fn = wrapper.function();
+        for (const Func &f : fs) {
+            user_assert(wrapped_fn.name() != f.name())
+                << "Cannot create wrapper of itself (\"" << wrapped_fn.name() <<  "\")\n";
+            wrapped_fn.add_wrapper(f.name(), wrapper_fn);
+        }
+        return wrapper;
+    }
+    internal_assert(iter->second.defined());
+    validate_wrapper(wrapped_fn.name(), wrappers, fs, iter->second);
+
+    Function wrapper(iter->second);
     internal_assert(wrapper.frozen());
     return Func(wrapper);
+}
+
+Func Func::in(const Func &f) {
+    invalidate_cache();
+    vector<Func> fs = {f};
+    return get_wrapper(func, name() + "_in_" + f.name(), fs, false);
+}
+
+Func Func::in(const vector<Func> &fs) {
+    if (fs.empty()) {
+        user_error << "Could not create a wrapper for an empty list of Funcs\n";
+    }
+    invalidate_cache();
+    return get_wrapper(func, name() + "_wrapper", fs, false);
 }
 
 Func Func::in() {
@@ -1831,10 +1828,65 @@ Func Func::in() {
         func.add_wrapper("", wrapper.func);
         return wrapper;
     }
+    internal_assert(iter->second.defined());
 
-    FunctionPtr wrapper_contents = iter->second;
-    internal_assert(wrapper_contents.defined());
-    Function wrapper(wrapper_contents);
+    Function wrapper(iter->second);
+    internal_assert(wrapper.frozen());
+    return Func(wrapper);
+}
+
+Func Func::clone_in(const Func &f) {
+    user_assert(name() != f.name()) << "Cannot call 'clone_in()' on itself\n";
+    invalidate_cache();
+
+    const map<string, FunctionPtr> &wrappers = func.wrappers();
+    const auto &iter = wrappers.find(f.name());
+    if (iter == wrappers.end()) {
+        Func wrapper(func.new_function_in_same_group(name() + "_clone_in_" + f.name()));
+        std::map<FunctionPtr, FunctionPtr> empty;
+        func.deep_copy(wrapper.name(), wrapper.function().get_contents(), empty);
+        func.add_wrapper(f.name(), wrapper.func);
+        return wrapper;
+    }
+    internal_assert(iter->second.defined());
+    validate_wrapper(name(), wrappers, {f}, iter->second);
+
+    Function wrapper(iter->second);
+    internal_assert(wrapper.frozen());
+    return Func(wrapper);
+}
+
+Func Func::clone_in(const vector<Func> &fs) {
+    if (fs.empty()) {
+        user_error << "Could not create a wrapper for an empty list of Funcs\n";
+    }
+    invalidate_cache();
+
+    // Either all Funcs have the same wrapper or they don't already have any wrappers.
+    // Otherwise, throw an error.
+    const map<string, FunctionPtr> &wrappers = func.wrappers();
+    const auto &iter = wrappers.find(fs[0].name());
+    if (iter == wrappers.end()) {
+        // Make sure the other Funcs also don't have any wrappers
+        for (size_t i = 1; i < fs.size(); ++i) {
+            user_assert(wrappers.count(fs[i].name()) == 0)
+                << "Cannot define the wrapper since " << fs[i].name()
+                << " already has a wrapper while " << fs[0].name() << " doesn't \n";
+        }
+        Func wrapper(func.new_function_in_same_group(name() + "_wrapper"));
+        std::map<FunctionPtr, FunctionPtr> empty;
+        func.deep_copy(wrapper.function().get_contents(), empty);
+
+        for (const Func &f : fs) {
+            user_assert(name() != f.name()) << "Cannot call 'clone_in()' on itself\n";
+            func.add_wrapper(f.name(), wrapper.func);
+        }
+        return wrapper;
+    }
+    internal_assert(iter->second.defined());
+    validate_wrapper(name(), wrappers, fs, iter->second);
+
+    Function wrapper(iter->second);
     internal_assert(wrapper.frozen());
     return Func(wrapper);
 }
