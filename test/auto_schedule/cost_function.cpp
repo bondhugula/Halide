@@ -4,9 +4,9 @@ using namespace Halide;
 
 int main(int argc, char **argv) {
 
-    int W = 6400;
-    int H = 4800;
-    Buffer<uint16_t> input(W, H);
+    int H = 6400;
+    int W = 4800;
+    Buffer<uint16_t> input(H, W);
 
     for (int y = 0; y < input.height(); y++) {
         for (int x = 0; x < input.width(); x++) {
@@ -30,23 +30,20 @@ int main(int argc, char **argv) {
                              stencils[i-1](x, y+2))/3;
     }
 
-    // Provide estimates on the pipeline output
+    // Specifying estimates
     stencils[num_stencils - 1].estimate(x, 0, 6200).estimate(y, 0, 4600);
 
-    // Auto-schedule the pipeline
-    Target target = get_jit_target_from_environment();
+    // Auto schedule the pipeline
+    Target target = get_target_from_environment();
     Pipeline p(stencils[num_stencils - 1]);
 
-    std::cout << "\n\n******************************************\nSCHEDULE:\n"
-              << "******************************************\n"
-              << p.auto_schedule(target)
-              << "\n******************************************\n\n";
+    p.auto_schedule(target);
 
     // Inspect the schedule
     stencils[num_stencils - 1].print_loop_nest();
 
     // Run the schedule
-    p.realize(6204, 4604);
+    Buffer<uint16_t> out = p.realize(6204, 4604);
 
     printf("Success!\n");
     return 0;

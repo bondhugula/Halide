@@ -3,10 +3,10 @@
 using namespace Halide;
 
 int main(int argc, char **argv) {
-    int W = 800;
-    int H = 1200;
+    int H = 800;
+    int W = 1200;
 
-    Buffer<uint16_t> input(W, H);
+    Buffer<uint16_t> input(H, W);
 
     for (int y = 0; y < input.height(); y++) {
         for (int x = 0; x < input.width(); x++) {
@@ -27,11 +27,11 @@ int main(int argc, char **argv) {
     Func g("g");
     g(x, y) = sum(f(x + w.x, y + w.y), "sum2")/1024;
 
-    // Provide estimates on the pipeline output
+    // Specifying estimates
     g.estimate(x, 0, input.width()).estimate(y, 0, input.height());
 
     // Pick a schedule
-    Target target = get_jit_target_from_environment();
+    Target target = get_target_from_environment();
     Pipeline p(g);
 
     p.auto_schedule(target);

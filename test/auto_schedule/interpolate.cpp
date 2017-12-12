@@ -1,39 +1,44 @@
-//
-// Code based on apps/interpoloate/interpolate.cpp
-//
+#include "Halide.h"
+
 #include <iostream>
 #include <limits>
 
-#include "Halide.h"
 #include "halide_benchmark.h"
+#include "halide_image_io.h"
+#include "halide_image.h"
 
 using namespace Halide;
 using namespace Halide::Tools;
 
 using std::vector;
 
-int run_test(bool auto_schedule, int argc, char **argv) {
-    int W = 1536;
-    int H = 2560;
+double run_test (bool auto_schedule) {
 
-    Buffer<float> in(W, H, 4);
-
-    // 8-bit RGBA image (per apps/images/rgba.png)
-    for (int y = 0; y < in.height(); y++) {
-        for (int x = 0; x < in.width(); x++) {
-            for (int c = 0; c < 4; c++) {
-                in(x, y, c) = rand() & 0xff;
-            }
-        }
-    }
+    Buffer<float> in = load_and_convert_image("../../../images/rgb.png");
+    
+    // in must have four color channels - rgba
 
     const int levels = 10;
 
-    Func downsampled[levels];
-    Func downx[levels];
-    Func interpolated[levels];
-    Func upsampled[levels];
-    Func upsampledx[levels];
+    std::vector<Func> downsampled;
+    std::vector<Func> downx;
+    std::vector<Func> interpolated;
+    std::vector<Func> upsampled;
+    std::vector<Func> upsampledx;
+    for (int i = 0; i < levels; i++) {
+        Func down("downsampled_" + std::to_string(i));
+        downsampled.push_back(down);
+        Func dx("downx_" + std::to_string(i));
+        downx.push_back(dx);
+        Func interp("interpolated_" + std::to_string(i));
+        interpolated.push_back(interp);
+        Func up("upsampled_" + std::to_string(i));
+        upsampled.push_back(up);
+        Func upx("upsampledx_" + std::to_string(i));
+        upsampledx.push_back(upx);
+
+    }
+
     Var x("x"), y("y"), c("c");
 
     Func clamped = BoundaryConditions::repeat_edge(in);
@@ -54,6 +59,8 @@ int run_test(bool auto_schedule, int argc, char **argv) {
             // pixels off each edge.
             Expr w = in.width()/(1 << l);
             Expr h = in.height()/(1 << l);
+            //Expr w = 1536/(1 << l);
+            //Expr h = 2560/(1 << l);
             prev = lambda(x, y, c, prev(clamp(x, 0, w), clamp(y, 0, h), c));
         }
 
@@ -75,17 +82,14 @@ int run_test(bool auto_schedule, int argc, char **argv) {
 
     Func normalize("normalize");
     normalize(x, y, c) = interpolated[0](x, y, c) / interpolated[0](x, y, 3);
-    normalize
-        .estimate(c, 0, 4)
-        .estimate(x, 0, in.width())
-        .estimate(y, 0, in.height());
 
-    std::cout << "Finished function setup." << std::endl;
-
-    Pipeline p(normalize);
+    normalize.estimate (c, 0, 4).
+              estimate (x, 0, in.width()).
+              estimate (y, 0, in.height());
 
     Target target = get_target_from_environment();
-
+    Pipeline p(normalize);
+    
     if (!auto_schedule) {
         int sched;
         if (target.has_gpu_feature()) {
@@ -214,39 +218,36 @@ int run_test(bool auto_schedule, int argc, char **argv) {
             assert(0 && "No schedule with this number.");
         }
     } else {
-        p.auto_schedule(target);
+#ifndef CPU
+       p.auto_schedule(target);
+#else
+    #ifndef PARALLELISM
+        #error "PARALLELISM Not Set"
+    #endif
+    #ifndef L2_CACHE_SIZE
+        #error "L2_CACHE_SIZE Not Set"
+    #endif    
+       MachineParams arch_params (PARALLELISM, L2_CACHE_SIZE, 40);
+       p.auto_schedule(target, arch_params);
+#endif 
     }
 
-    // Inspect the schedule
     normalize.print_loop_nest();
-
-    // JIT compile the pipeline eagerly, so we don't interfere with timing
-    normalize.compile_jit(target);
-
-    // Benchmark the schedule
-    Buffer<float> out(in.width(), in.height(), 3);
-    double t = benchmark(5, 50, [&]() {
-        p.realize(out);
-    });
-
+    Buffer<float> out (in.width (), in.height (), 4);
+    double t = benchmark (5, 10, [&](){p.realize (out);});
     return t*1000;
 }
 
-
 int main(int argc, char **argv) {
-    double manual_time = run_test(false, argc, argv);
-    double auto_time = run_test(true, argc, argv);
+    std::cout << "Compiling Manual Schedule " << std::endl;
+    double manual_time = run_test(false);
+    std::cout << "Compiling Auto Schedule " << std::endl;
+    double auto_time = run_test(true);
 
     std::cout << "======================" << std::endl;
     std::cout << "Manual time: " << manual_time << "ms" << std::endl;
     std::cout << "Auto time: " << auto_time << "ms" << std::endl;
     std::cout << "======================" << std::endl;
-
-    if (auto_time > manual_time * 2) {
-        printf("Auto-scheduler is much much slower than it should be.\n");
-        return -1;
-    }
-
     printf("Success!\n");
     return 0;
 }

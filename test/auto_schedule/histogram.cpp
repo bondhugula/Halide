@@ -1,13 +1,12 @@
 #include "Halide.h"
-#include "halide_benchmark.h"
+#include "benchmark.h"
 
 using namespace Halide;
-using namespace Halide::Tools;
 
 double run_test(bool auto_schedule) {
-    int W = 1920;
-    int H = 1024;
-    Buffer<uint8_t> in(W, H, 3);
+    int H = 1920;
+    int W = 1024;
+    Buffer<uint8_t> in(H, W, 3);
 
     for (int y = 0; y < in.height(); y++) {
         for (int x = 0; x < in.width(); x++) {
@@ -17,10 +16,11 @@ double run_test(bool auto_schedule) {
         }
     }
 
-    Var x("x"), y("y"), c("c");
+    Var x, y, c;
 
     Func Y("Y");
-    Y(x, y) = 0.299f * in(x, y, 0) + 0.587f * in(x, y, 1) + 0.114f * in(x, y, 2);
+    Y(x, y) = 0.299f * in(x, y, 0) + 0.587f * in(x, y, 1)
+            + 0.114f * in(x, y, 2);
 
     Func Cr("Cr");
     Expr R = in(x, y, 0);
@@ -57,52 +57,53 @@ double run_test(bool auto_schedule) {
     Expr blue = cast<uint8_t> (clamp(eq(x, y) + 1.765f * (Cb(x, y) - 128), 0, 255));
     color(x, y, c) = select(c == 0, red, select(c == 1, green , blue));
 
-    Target target = get_jit_target_from_environment();
+    color.estimate(x, 0, 1920).estimate(y, 0, 1024).estimate(c, 0, 3);
+
+    Target target = get_target_from_environment();
     Pipeline p(color);
 
-    if (auto_schedule) {
-        // Provide estimates on the pipeline output
-        color.estimate(x, 0, 1920).estimate(y, 0, 1024).estimate(c, 0, 3);
-        // Auto-schedule the pipeline
-        p.auto_schedule(target);
-    } else if (target.has_gpu_feature()) {
-        Var xi("xi"), yi("yi");
-        Y.compute_root().gpu_tile(x, y, xi, yi, 16, 16);
-        hist_rows.compute_root().gpu_tile(y, yi, 16).update().gpu_tile(y, yi, 16);
-        hist.compute_root().gpu_tile(x, xi, 16).update().gpu_tile(x, xi, 16);
-        cdf.compute_root().gpu_single_thread();
-        Cr.compute_at(color, xi);
-        Cb.compute_at(color, xi);
-        eq.compute_at(color, xi);
-        color.compute_root()
-             .reorder(c, x, y).bound(c, 0, 3).unroll(c)
-             .gpu_tile(x, y, xi, yi, 16, 16);
+    if (!auto_schedule) {
+        if (target.has_gpu_feature()) {
+            Y.compute_root().gpu_tile(x, y, 16, 16);
+            hist_rows.compute_root().gpu_tile(y, 16).update().gpu_tile(y, 16);
+            hist.compute_root().gpu_tile(x, 16).update().gpu_tile(x, 16);
+            cdf.compute_root().gpu_single_thread();
+            Cr.compute_at(color, Var::gpu_threads());
+            Cb.compute_at(color, Var::gpu_threads());
+            eq.compute_at(color, Var::gpu_threads());
+            color.compute_root()
+                    .reorder(c, x, y).bound(c, 0, 3).unroll(c)
+                    .gpu_tile(x, y, 16, 16);
+        } else {
+            Y.compute_root().parallel(y, 8).vectorize(x, 8);
+
+            hist_rows.compute_root()
+                    .vectorize(x, 8)
+                    .parallel(y, 8)
+                    .update()
+                    .parallel(y, 8);
+            hist.compute_root()
+                    .vectorize(x, 8)
+                    .update()
+                    .reorder(x, ry)
+                    .vectorize(x, 8)
+                    .unroll(x, 4)
+                    .parallel(x)
+                    .reorder(ry, x);
+
+            cdf.compute_root();
+            eq.compute_at(color, x).unroll(x);
+            Cb.compute_at(color, x).vectorize(x);
+            Cr.compute_at(color, x).vectorize(x);
+            color.reorder(c, x, y)
+                    .bound(c, 0, 3)
+                    .unroll(c)
+                    .parallel(y, 8)
+                    .vectorize(x, 8);
+        }
     } else {
-        Y.compute_root().parallel(y, 8).vectorize(x, 8);
-
-        hist_rows.compute_root()
-            .vectorize(x, 8)
-            .parallel(y, 8)
-            .update()
-            .parallel(y, 8);
-        hist.compute_root()
-            .vectorize(x, 8)
-            .update()
-            .reorder(x, ry)
-            .vectorize(x, 8)
-            .unroll(x, 4)
-            .parallel(x)
-            .reorder(ry, x);
-
-        cdf.compute_root();
-        eq.compute_at(color, x).unroll(x);
-        Cb.compute_at(color, x).vectorize(x);
-        Cr.compute_at(color, x).vectorize(x);
-        color.reorder(c, x, y)
-             .bound(c, 0, 3)
-             .unroll(c)
-             .parallel(y, 8)
-             .vectorize(x, 8);
+        // Auto schedule the pipeline
+        p.auto_schedule(target);
     }
 
     p.compile_to_lowered_stmt("histogram.html", {in}, HTML, target);
@@ -124,12 +125,6 @@ int main(int argc, char **argv) {
     std::cout << "Manual time: " << manual_time << "ms" << std::endl;
     std::cout << "Auto time: " << auto_time << "ms" << std::endl;
     std::cout << "======================" << std::endl;
-
-    if (auto_time > manual_time * 3) {
-        printf("Auto-scheduler is much much slower than it should be.\n");
-        return -1;
-    }
-
     printf("Success!\n");
     return 0;
 }

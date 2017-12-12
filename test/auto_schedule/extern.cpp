@@ -33,8 +33,7 @@ extern "C" DLLEXPORT int translate(buffer_t *in, int dx, int dy, buffer_t *out) 
 
 using namespace Halide;
 
-// Test a pipe with several extern-defined Funcs.
-void test_case_1() {
+int main(int argc, char **argv) {
     ImageParam input(UInt(8), 2);
     Var x("x"), y("y");
     Func f0("f0");
@@ -55,57 +54,16 @@ void test_case_1() {
     Func g("g");
     g(x, y) = f1(x, y) + f2(x, y);
 
-    // Provide estimates on the pipeline output
     g.estimate(x, 0, 1000).estimate(y, 0, 1000);
 
-    // Provide estimates on the ImageParam
-    input.dim(0).set_bounds_estimate(0, 1000);
-    input.dim(1).set_bounds_estimate(0, 1000);
-
-    // Auto-schedule the pipeline
-    Target target = get_jit_target_from_environment();
+    // Auto schedule the pipeline
+    Target target = get_target_from_environment();
     Pipeline p(g);
 
     p.auto_schedule(target);
 
     // Inspect the schedule
     g.print_loop_nest();
-}
-
-// Test with an extern Func which consumes a trivial Func; autoscheduler
-// should not attempt to inline into the extern consumer.
-void test_case_2() {
-    ImageParam input(UInt(8), 2);
-    Var x("x"), y("y");
-    Func f0("f0"), f1("f1"), f2("f2"), g("g");
-
-    f0(x, y) = input(x, y) * 2;
-
-    // Create f1, which is not a wrapper, but is trivial to inline
-    // into the next extern Func (because print() has no cost)
-    f1(x, y) = print(f0(x, y));
-
-    f2.define_extern("translate", {f1, Expr(0), Expr(0)}, UInt(8), 2);
-
-    g(x, y) = f2(x, y);
-
-    g.estimate(x, 0, 10).estimate(y, 0, 10);
-    input.dim(0).set_bounds_estimate(0, 10);
-    input.dim(1).set_bounds_estimate(0, 10);
-
-    // Auto-schedule the pipeline
-    Target target = get_jit_target_from_environment();
-    Pipeline p(g);
-
-    p.auto_schedule(target);
-
-    // Inspect the schedule
-    g.print_loop_nest();
-}
-
-int main(int argc, char **argv) {
-    test_case_1();
-    test_case_2();
 
     printf("Success!\n");
     return 0;

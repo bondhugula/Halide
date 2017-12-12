@@ -1019,7 +1019,14 @@ $(BIN_DIR)/opengl_%: $(ROOT_DIR)/test/opengl/%.cpp $(BIN_DIR)/libHalide.$(SHARED
 
 # Auto schedule tests that link against libHalide
 $(BIN_DIR)/auto_schedule_%: $(ROOT_DIR)/test/auto_schedule/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
-	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE_FOR_BUILD_TIME) $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $(TEST_CXX_FLAGS) $(OPTIMIZE_FOR_BUILD_TIME) -lpng -ljpeg $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
+
+# Auto schedule tests that link against libHalide
+$(BIN_DIR)/auto_schedule_%_intel: $(ROOT_DIR)/test/auto_schedule/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
+	$(CXX) -DCPU=Xeon -DPARALLELISM=16 -DL2_CACHE_SIZE=256*1024 $(TEST_CXX_FLAGS) $(OPTIMIZE_FOR_BUILD_TIME) -lpng -ljpeg $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
+
+$(BIN_DIR)/auto_schedule_%_amd: $(ROOT_DIR)/test/auto_schedule/%.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
+	$(CXX) -DCPU=Opteron -DPARALLELISM=16 -DL2_CACHE_SIZE=1024*1024 $(TEST_CXX_FLAGS) $(OPTIMIZE_FOR_BUILD_TIME) -lpng -ljpeg $< -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) -o $@
 
 # TODO(srj): this doesn't auto-delete, why not?
 .INTERMEDIATE: $(BIN_DIR)/%.generator

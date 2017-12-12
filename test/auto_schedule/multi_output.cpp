@@ -3,9 +3,9 @@
 using namespace Halide;
 
 int main(int argc, char **argv) {
-    int W = 1000;
     int H = 1000;
-    Buffer<uint16_t> input(W, H);
+    int W = 1000;
+    Buffer<uint16_t> input(H, W);
 
     for (int y = 0; y < input.height(); y++) {
         for (int x = 0; x < input.width(); x++) {
@@ -24,17 +24,17 @@ int main(int argc, char **argv) {
     Func h("h");
     h(x, y) = (f(x, y) + f(x, y+1))/2;
 
-    // Provide estimates on the pipeline output
+    // Specifying estimates
     g.estimate(x, 0, 1000).estimate(y, 0, 1000);
     h.estimate(x, 0, 1000).estimate(y, 0, 1000);
 
-    // Auto-schedule the pipeline
+    // Auto schedule the pipeline
     std::vector<Func> outs;
     outs.push_back(h);
     outs.push_back(g);
     Pipeline test(outs);
 
-    Target target = get_jit_target_from_environment();
+    Target target = get_target_from_environment();
     test.auto_schedule(target);
 
     // Inspect the schedule
