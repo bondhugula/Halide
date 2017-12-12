@@ -83,7 +83,7 @@ double run_test (bool auto_schedule) {
     Func normalize("normalize");
     normalize(x, y, c) = interpolated[0](x, y, c) / interpolated[0](x, y, 3);
 
-    normalize.estimate (c, 0, 4).
+    normalize.estimate (c, 0, 3).
               estimate (x, 0, in.width()).
               estimate (y, 0, in.height());
 
@@ -233,8 +233,8 @@ double run_test (bool auto_schedule) {
     }
 
     normalize.print_loop_nest();
-    Buffer<float> out (in.width (), in.height (), 4);
-    double t = benchmark (5, 10, [&](){p.realize (out);});
+    Buffer<float> out (in.width (), in.height (), 3);
+    double t = benchmark (5, 1, [&](){p.realize (out);});
     return t*1000;
 }
 
